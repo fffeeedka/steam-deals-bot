@@ -65,6 +65,21 @@ class Config:
 # --- клавиатуры ----------------------------------------------------------
 
 
+def genre_menu() -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    row: list[InlineKeyboardButton] = []
+    for index, genre in enumerate(view.KNOWN_GENRES):
+        row.append(InlineKeyboardButton(genre, callback_data=f"find:{index}"))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([InlineKeyboardButton("✏️ По названию", callback_data="menu:searchname")])
+    rows.append([InlineKeyboardButton("🏠 Меню", callback_data="menu:main")])
+    return InlineKeyboardMarkup(rows)
+
+
 def main_menu() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
@@ -469,6 +484,8 @@ async def _send_search_card(
         return False
 
     caption = f"{index + 1}. " + view.card(game, chat)
+    if state.get("genre"):
+        caption = f"🔍 {state['genre']}\n" + caption
     await context.bot.send_photo(
         chat_id=chat_id,
         photo=game.cover,
@@ -480,9 +497,12 @@ async def _send_search_card(
 
 
 async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    context.user_data["await_query"] = True
+    store: Store = context.application.bot_data["store"]
+    _chat(update, store)
+    context.user_data["await_query"] = False
     await update.message.reply_text(
-        "🔍 Пришли название игры — покажу обложку, цену и кнопку «Следующая»."
+        "🔍 Выбери жанр — покажу игры из всего каталога Steam, а не только новинки.",
+        reply_markup=genre_menu(),
     )
 
 
@@ -548,11 +568,43 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     if data == "menu:search":
+        context.user_data["await_query"] = False
+        await query.edit_message_text(
+            "🔍 Выбери жанр — покажу игры из всего каталога Steam, а не только новинки.",
+            reply_markup=genre_menu(),
+        )
+        return
+
+    if data == "menu:searchname":
         context.user_data["await_query"] = True
         await query.edit_message_text(
-            "🔍 Пришли название игры — покажу обложку, цену и кнопку «Следующая».",
+            "✏️ Пришли название игры — покажу её карточку.",
             reply_markup=main_menu(),
         )
+        return
+
+    if data.startswith("find:"):
+        try:
+            genre = view.KNOWN_GENRES[int(data.split(":", 1)[1])]
+        except (ValueError, IndexError):
+            return
+
+        config: Config = context.application.bot_data["config"]
+        await query.edit_message_text(f"Ищу игры в жанре «{genre}»…")
+        ids = await asyncio.to_thread(steam.search_by_genre, genre, config.cc)
+
+        if not ids:
+            await query.edit_message_text(
+                f"В жанре «{genre}» ничего не нашлось.", reply_markup=genre_menu()
+            )
+            return
+
+        context.user_data["search"] = {"ids": ids, "index": 0, "genre": genre}
+        try:
+            await query.message.delete()
+        except Exception:  # noqa: BLE001
+            pass
+        await _send_search_card(context, query.message.chat_id, chat)
         return
 
     if data == "search:next":

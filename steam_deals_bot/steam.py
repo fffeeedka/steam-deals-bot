@@ -147,6 +147,44 @@ def search_by_term(term: str, cc: str = "us", limit: int = 20) -> list[int]:
     return found[:limit]
 
 
+def _collect_ids(payload: dict, into: list[int]) -> int:
+    matches = _APPID_RE.findall(payload.get("results_html") or "")
+    for chunk in matches:
+        for token in chunk.split(","):
+            if token.isdigit() and int(token) not in into:
+                into.append(int(token))
+    return len(matches)
+
+
+def search_by_genre(genre: str, cc: str = "us", pages: int = 3, limit: int = 60) -> list[int]:
+    """Все игры жанра из каталога Steam — без фильтра «новинки»."""
+    params = {
+        "genre": genre,
+        "category1": 998,
+        "infinite": 1,
+        "count": 100,
+        "start": 0,
+        "cc": cc,
+        "l": "english",
+        "dynamic_data": "",
+    }
+    ids: list[int] = []
+    for page in range(max(pages, 1)):
+        params["start"] = page * 100
+        try:
+            payload = get_json(SEARCH_URL, params)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[warn] жанр «{genre}», страница {page}: {exc}")
+            break
+        if _collect_ids(payload, ids) < 100:
+            break
+        time.sleep(1.0)
+
+    if not ids:  # если Steam не понял параметр жанра — ищем по слову
+        ids = search_by_term(genre, cc=cc, limit=limit)
+    return ids[:limit]
+
+
 # --- карточка игры -------------------------------------------------------
 
 
