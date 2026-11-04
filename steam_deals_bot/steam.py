@@ -42,6 +42,11 @@ class Game:
     def url(self) -> str:
         return f"https://store.steampowered.com/app/{self.appid}/"
 
+    @property
+    def cover(self) -> str:
+        """Обложка 460x215 с CDN Steam — Telegram скачает её сам."""
+        return f"https://cdn.cloudflare.steamstatic.com/steam/apps/{self.appid}/header.jpg"
+
 
 def get_json(url: str, params: dict | None = None, attempts: int = 3, timeout: int = 25):
     if params:
