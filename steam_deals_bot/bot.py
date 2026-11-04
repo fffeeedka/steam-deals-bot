@@ -483,11 +483,18 @@ async def _health_server(port: int) -> None:
         await server.serve_forever()
 
 
-async def scheduled_scan(context: ContextTypes.DEFAULT_TYPE) -> None:
-    try:
-        await scan_and_send(context.application)
-    except Exception:  # noqa: BLE001
-        logger.exception("ошибка в плановом прогоне")
+async def _scan_loop(app: Application) -> None:
+    """Планировщик на asyncio — без APScheduler и лишних зависимостей."""
+    interval = app.bot_data["config"].interval_minutes * 60
+    await asyncio.sleep(30)
+    while True:
+        try:
+            await scan_and_send(app)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001
+            logger.exception("ошибка в плановом прогоне")
+        await asyncio.sleep(interval)
 
 
 async def _post_init(app: Application) -> None:
@@ -497,6 +504,8 @@ async def _post_init(app: Application) -> None:
     port = os.getenv("PORT", "").strip()
     if port.isdigit():
         app.create_task(_health_server(int(port)), name="health-server")
+
+    app.create_task(_scan_loop(app), name="scan-loop")
 
 
 async def _post_shutdown(app: Application) -> None:
@@ -527,9 +536,6 @@ def build_app(config: Config) -> Application:
     app.add_handler(CommandHandler("stop", cmd_stop))
     app.add_handler(CallbackQueryHandler(on_button))
 
-    app.job_queue.run_repeating(
-        scheduled_scan, interval=config.interval_minutes * 60, first=30, name="steam-scan"
-    )
     return app
 
 

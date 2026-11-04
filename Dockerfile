@@ -7,9 +7,9 @@ ENV PYTHONUNBUFFERED=1 \
 WORKDIR /app
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --upgrade pip && pip install --no-cache-dir -r requirements.txt
 
-COPY steam_deals_bot ./steam_deals_bot
+COPY . .
 
 # База и кэш каталога живут вне контейнера, чтобы настройки не терялись.
 VOLUME ["/app/data"]
