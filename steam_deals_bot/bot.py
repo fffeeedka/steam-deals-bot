@@ -38,6 +38,8 @@ class Config:
     interval_minutes: int = 15
     max_per_run: int = 5
     new_lookup_limit: int = 120
+    catalog_batch: int = 25  # сколько бесплатных игр из каталога проверять за прогон
+    catalog_per_run: int = 3  # сколько из них максимум отправить в один чат
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -53,6 +55,8 @@ class Config:
             interval_minutes=int(os.getenv("CHECK_INTERVAL_MINUTES", "15")),
             max_per_run=int(os.getenv("MAX_PER_RUN", "5")),
             new_lookup_limit=int(os.getenv("NEW_LOOKUP_LIMIT", "120")),
+            catalog_batch=int(os.getenv("CATALOG_BATCH", "25")),
+            catalog_per_run=int(os.getenv("CATALOG_PER_RUN", "3")),
         )
 
 
@@ -91,6 +95,14 @@ def settings_menu(chat: Chat) -> InlineKeyboardMarkup:
             InlineKeyboardButton("−10%", callback_data="disc:down"),
             InlineKeyboardButton(f"от {discount}%", callback_data="menu:noop"),
             InlineKeyboardButton("+10%", callback_data="disc:up"),
+        ]
+    )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                ("✅ " if chat.settings.get("catalog", True) else "❌ ") + "🆓 Фри-каталог",
+                callback_data="cat:toggle",
+            )
         ]
     )
     rows.append([InlineKeyboardButton("⬅️ Назад", callback_data="menu:main")])
@@ -168,6 +180,32 @@ def collect_new(config: Config, store: Store) -> list[steam.Game]:
     return list(found.values())
 
 
+def collect_catalog(config: Config, store: Store) -> list[steam.Game]:
+    """Бесплатные игры, которые уже есть в каталоге Steam (не только новинки).
+
+    Каталог огромный, поэтому идём по нему курсором: за прогон проверяется
+    ровно `catalog_batch` записей, следующие — в следующем прогоне.
+    """
+    ids = steam.search_appids("catalog", cc=config.cc, pages=5)
+    if not ids:
+        return []
+
+    cursor = int(store.meta_get("catalog_cursor", "0") or 0)
+    if cursor >= len(ids):
+        cursor = 0
+    chunk = ids[cursor : cursor + config.catalog_batch]
+    store.meta_set("catalog_cursor", str(cursor + config.catalog_batch))
+
+    games: list[steam.Game] = []
+    for appid in chunk:
+        game = steam.app_details(appid, cc=config.cc)
+        if game is not None and (game.is_free or game.promo):
+            games.append(game)
+        time.sleep(1.0)
+    logger.info("каталог: проверено %s, бесплатных %s", len(chunk), len(games))
+    return games
+
+
 async def _send_game(app: Application, chat_id: int, game: steam.Game, chat: Chat) -> None:
     caption = view.card(game, chat)
     try:
@@ -187,12 +225,21 @@ async def scan_and_send(app: Application, force: bool = False) -> int:
     store: Store = app.bot_data["store"]
 
     games = await asyncio.to_thread(collect_new, config, store)
-    if not games:
+
+    chats = store.all_chats()
+    catalog_games: list[steam.Game] = []
+    if any(chat.settings.get("catalog", True) for chat in chats):
+        try:
+            catalog_games = await asyncio.to_thread(collect_catalog, config, store)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("каталог бесплатных игр недоступен: %s", exc)
+
+    if not games and not catalog_games:
         logger.info("новых игр не найдено")
         return 0
 
     sent_total = 0
-    for chat in store.all_chats():
+    for chat in chats:
         if not chat.settings.get("enabled", True):
             continue
         if not force and time.time() - float(store.meta_get(f"last_scan_{chat.chat_id}", "0") or 0) < 60:
@@ -204,8 +251,21 @@ async def scan_and_send(app: Application, force: bool = False) -> int:
             if view.passes(game, chat) and not store.was_sent(chat.chat_id, game.appid)
         ]
         fresh.sort(key=lambda game: view.score(game, chat), reverse=True)
+        queue = fresh[: config.max_per_run]
 
-        for game in fresh[: config.max_per_run]:
+        if chat.settings.get("catalog", True) and catalog_games:
+            taken = {game.appid for game in queue}
+            extra = [
+                game
+                for game in catalog_games
+                if game.appid not in taken
+                and view.passes(game, chat)
+                and not store.was_sent(chat.chat_id, game.appid)
+            ]
+            extra.sort(key=lambda game: (view.score(game, chat), game.appid), reverse=True)
+            queue += extra[: config.catalog_per_run]
+
+        for game in queue:
             try:
                 await _send_game(app, chat.chat_id, game, chat)
             except Forbidden:
@@ -393,6 +453,14 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         step = 10 if data.endswith("up") else -10
         value = max(10, min(int(chat.settings.get("min_discount", 50)) + step, 90))
         store.update_setting(chat.chat_id, "min_discount", value)
+        chat = store.get_chat(chat.chat_id) or chat
+        await query.edit_message_text(
+            view.settings_text(chat), parse_mode=ParseMode.HTML, reply_markup=settings_menu(chat)
+        )
+        return
+
+    if data == "cat:toggle":
+        store.update_setting(chat.chat_id, "catalog", not chat.settings.get("catalog", True))
         chat = store.get_chat(chat.chat_id) or chat
         await query.edit_message_text(
             view.settings_text(chat), parse_mode=ParseMode.HTML, reply_markup=settings_menu(chat)

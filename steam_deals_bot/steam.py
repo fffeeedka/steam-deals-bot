@@ -89,6 +89,9 @@ def search_appids(kind: str, cc: str = "us", pages: int = 2, page_size: int = 10
         params["sort_by"] = "Released_DESC"
     elif kind == "freebie":
         params.update({"sort_by": "Price_ASC", "specials": 1, "maxprice": "free"})
+    elif kind == "catalog":
+        # Все бесплатные игры каталога, а не только акции: free-to-play и «навсегда бесплатно».
+        params.update({"sort_by": "Price_ASC", "maxprice": "free"})
     elif kind == "deals":
         params.update({"sort_by": "Discount_DESC", "specials": 1})
     else:

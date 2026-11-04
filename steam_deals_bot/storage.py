@@ -14,6 +14,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "min_discount": 50,
     "priority_genres": [],
     "blocked_genres": [],
+    "catalog": True,  # показывать бесплатные игры из каталога Steam, а не только новинки
 }
 
 MODES = ("free", "new", "deals")

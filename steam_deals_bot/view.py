@@ -118,5 +118,6 @@ def settings_text(chat: Chat) -> str:
         f"Минимальная скидка: <b>{settings.get('min_discount', 50)}%</b>\n"
         f"⭐ Приоритетные жанры: {html.escape(priority)}\n"
         f"🚫 Скрытые жанры: {html.escape(blocked)}\n"
+        f"🆓 Фри-каталог: {'включён' if settings.get('catalog', True) else 'выключен'}\n"
         f"Рассылка: {'включена' if settings.get('enabled') else 'выключена'}"
     )
