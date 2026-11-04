@@ -119,6 +119,34 @@ def search_appids(kind: str, cc: str = "us", pages: int = 2, page_size: int = 10
     return found
 
 
+def search_by_term(term: str, cc: str = "us", limit: int = 20) -> list[int]:
+    """appid'ы по поисковому запросу — для кнопки «Поиск»."""
+    try:
+        payload = get_json(
+            SEARCH_URL,
+            {
+                "term": term,
+                "category1": 998,
+                "infinite": 1,
+                "count": 100,
+                "start": 0,
+                "cc": cc,
+                "l": "english",
+                "dynamic_data": "",
+            },
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"[warn] поиск «{term}»: {exc}")
+        return []
+
+    found: list[int] = []
+    for chunk in _APPID_RE.findall(payload.get("results_html") or ""):
+        for token in chunk.split(","):
+            if token.isdigit() and int(token) not in found:
+                found.append(int(token))
+    return found[:limit]
+
+
 # --- карточка игры -------------------------------------------------------
 
 

@@ -19,6 +19,8 @@ from telegram.ext import (
     CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
+    MessageHandler,
+    filters,
 )
 
 from . import steam, view
@@ -70,9 +72,22 @@ def main_menu() -> InlineKeyboardMarkup:
                 InlineKeyboardButton("⚙️ Настройки", callback_data="menu:settings"),
                 InlineKeyboardButton("⭐ Жанры", callback_data="menu:priority"),
             ],
+            [InlineKeyboardButton("🔍 Поиск игры", callback_data="menu:search")],
             [
                 InlineKeyboardButton("🔄 Проверить", callback_data="menu:scan"),
                 InlineKeyboardButton("📋 Последние", callback_data="menu:latest"),
+            ],
+        ]
+    )
+
+
+def search_menu(index: int, total: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton(f"➡️ Следующая ({index + 1}/{total})", callback_data="search:next")],
+            [
+                InlineKeyboardButton("🔍 Новый поиск", callback_data="menu:search"),
+                InlineKeyboardButton("🏠 Меню", callback_data="menu:main"),
             ],
         ]
     )
@@ -425,6 +440,79 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await cmd_start(update, context)
 
 
+# --- поиск игры ----------------------------------------------------------
+
+
+async def _send_search_card(
+    context: ContextTypes.DEFAULT_TYPE, chat_id: int, chat: Chat
+) -> bool:
+    state = context.user_data.get("search") or {}
+    ids: list[int] = list(state.get("ids") or [])
+    if not ids:
+        return False
+
+    config: Config = context.application.bot_data["config"]
+    index = int(state.get("index", 0)) % len(ids)
+
+    game = None
+    for _ in range(min(5, len(ids))):
+        game = await asyncio.to_thread(steam.app_details, ids[index], config.cc)
+        if game is not None:
+            break
+        index = (index + 1) % len(ids)
+
+    state["index"] = index
+    context.user_data["search"] = state
+
+    if game is None:
+        await context.bot.send_message(chat_id, "Steam не отдал данные по этой игре.")
+        return False
+
+    caption = f"{index + 1}. " + view.card(game, chat)
+    await context.bot.send_photo(
+        chat_id=chat_id,
+        photo=game.cover,
+        caption=caption[:1024],
+        parse_mode=ParseMode.HTML,
+        reply_markup=search_menu(index, len(ids)),
+    )
+    return True
+
+
+async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    context.user_data["await_query"] = True
+    await update.message.reply_text(
+        "🔍 Пришли название игры — покажу обложку, цену и кнопку «Следующая»."
+    )
+
+
+async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not context.user_data.pop("await_query", False):
+        return
+
+    term = (update.message.text or "").strip()
+    if not term:
+        return
+
+    config: Config = context.application.bot_data["config"]
+    store: Store = context.application.bot_data["store"]
+    chat = store.add_chat(update.effective_chat.id)
+
+    notice = await update.message.reply_text("Ищу в Steam…")
+    ids = await asyncio.to_thread(steam.search_by_term, term, config.cc)
+
+    if not ids:
+        await notice.edit_text("Ничего не нашлось. Попробуй другое название.")
+        return
+
+    context.user_data["search"] = {"ids": ids, "index": 0}
+    try:
+        await notice.delete()
+    except Exception:  # noqa: BLE001
+        pass
+    await _send_search_card(context, update.effective_chat.id, chat)
+
+
 # --- кнопки --------------------------------------------------------------
 
 
@@ -457,6 +545,30 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await query.edit_message_text(
             view.settings_text(chat), parse_mode=ParseMode.HTML, reply_markup=settings_menu(chat)
         )
+        return
+
+    if data == "menu:search":
+        context.user_data["await_query"] = True
+        await query.edit_message_text(
+            "🔍 Пришли название игры — покажу обложку, цену и кнопку «Следующая».",
+            reply_markup=main_menu(),
+        )
+        return
+
+    if data == "search:next":
+        state = context.user_data.get("search") or {}
+        if not state.get("ids"):
+            await query.edit_message_text(
+                "Список пуст — начни новый поиск.", reply_markup=main_menu()
+            )
+            return
+        state["index"] = (int(state.get("index", 0)) + 1) % len(state["ids"])
+        context.user_data["search"] = state
+        try:
+            await query.message.delete()
+        except Exception:  # noqa: BLE001
+            pass
+        await _send_search_card(context, query.message.chat_id, chat)
         return
 
     if data == "cat:toggle":
@@ -596,8 +708,10 @@ def build_app(config: Config) -> Application:
     app.add_handler(CommandHandler("block", cmd_block))
     app.add_handler(CommandHandler("latest", cmd_latest))
     app.add_handler(CommandHandler("scan", cmd_scan))
+    app.add_handler(CommandHandler("search", cmd_search))
     app.add_handler(CommandHandler("stop", cmd_stop))
     app.add_handler(CallbackQueryHandler(on_button))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
 
     return app
 

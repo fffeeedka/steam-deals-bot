@@ -97,11 +97,6 @@ def card(game: Game, chat: Chat) -> str:
         lines.append("🎮 " + html.escape(", ".join(game.genres[:4])))
     if game.release_date:
         lines.append("📅 " + html.escape(game.release_date))
-    if game.description:
-        text = game.description.strip()
-        if len(text) > 220:
-            text = text[:217].rstrip() + "…"
-        lines.append(f"<i>{html.escape(text)}</i>")
 
     lines.append(f'<a href="{game.url}">Открыть в Steam</a>')
     return "\n".join(lines)
