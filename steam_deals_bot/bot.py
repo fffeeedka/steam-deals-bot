@@ -26,12 +26,7 @@ from .storage import Chat, Store
 
 logger = logging.getLogger(__name__)
 
-WELCOME = (
-    "🎁 <b>Новинки и скидки Steam</b>\n\n"
-    "Присылаю обложку и ссылку, как только появляется бесплатная игра "
-    "или хорошая скидка.\n\n"
-    "Настрой жанры — и они будут приходить первыми."
-)
+WELCOME = "🎁 <b>Новинки и скидки Steam</b>"
 
 
 @dataclass
