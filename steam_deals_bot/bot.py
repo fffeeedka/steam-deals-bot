@@ -332,9 +332,35 @@ async def scheduled_scan(context: ContextTypes.DEFAULT_TYPE) -> None:
 # --- запуск --------------------------------------------------------------
 
 
+async def _health_server(port: int) -> None:
+    """Минимальный HTTP-ответ на /, чтобы панели, ждущие веб-сервис, не рестартовали бота."""
+
+    async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        try:
+            await asyncio.wait_for(reader.readline(), timeout=5)
+            writer.write(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n"
+                b"Content-Length: 2\r\nConnection: close\r\n\r\nok"
+            )
+            await writer.drain()
+        except Exception:  # noqa: BLE001
+            pass
+        finally:
+            writer.close()
+
+    server = await asyncio.start_server(handle, "0.0.0.0", port)
+    logger.info("health-check слушает порт %s", port)
+    async with server:
+        await server.serve_forever()
+
+
 async def _post_init(app: Application) -> None:
     app.bot_data["store"] = Store(app.bot_data["config"].db_path)
     logger.info("бот запущен, интервал проверки %s мин", app.bot_data["config"].interval_minutes)
+
+    port = os.getenv("PORT", "").strip()
+    if port.isdigit():
+        app.create_task(_health_server(int(port)), name="health-server")
 
 
 async def _post_shutdown(app: Application) -> None:
